@@ -1,38 +1,53 @@
-# Copyright (c) 2016-present Mattermost, Inc. All Rights Reserved.
-# See License.txt for license information.
-FROM mysql:5.7
+FROM alpine:3.7
 
-RUN apt-get update && apt-get install -y ca-certificates
+# Some ENV variables
+ENV PATH="/mattermost/bin:${PATH}"
+ENV MM_VERSION=5.5.0
 
-#
-# Configure SQL
-#
+# Build argument to set Mattermost edition
+ARG edition=enterprise
+ARG PUID=2000
+ARG PGID=2000
+ARG MM_BINARY=
 
-ENV MYSQL_ROOT_PASSWORD=mostest
-ENV MYSQL_USER=mmuser
-ENV MYSQL_PASSWORD=mostest
-ENV MYSQL_DATABASE=mattermost_test
 
-#
-# Configure Mattermost
-#
-WORKDIR /mm
+# Install some needed packages
+RUN apk add --no-cache \
+	ca-certificates \
+	curl \
+	jq \
+	libc6-compat \
+	libffi-dev \
+	linux-headers \
+	mailcap \
+	netcat-openbsd \
+	xmlsec-dev \
+	&& rm -rf /tmp/*
 
-# Copy over files
-ADD https://releases.mattermost.com/5.5.0/mattermost-team-5.5.0-linux-amd64.tar.gz .
-RUN tar -zxvf ./mattermost-team-5.5.0-linux-amd64.tar.gz
-ADD config_docker.json ./mattermost/config/config_docker.json
-ADD docker-entry.sh .
+# Get Mattermost
+RUN mkdir -p /mattermost/data /mattermost/plugins /mattermost/client/plugins \
+    && if [ ! -z "$MM_BINARY" ]; then curl $MM_BINARY | tar -xvz ; \
+      elif [ "$edition" = "team" ] ; then curl https://releases.mattermost.com/$MM_VERSION/mattermost-team-$MM_VERSION-linux-amd64.tar.gz | tar -xvz ; \
+      else curl https://releases.mattermost.com/$MM_VERSION/mattermost-$MM_VERSION-linux-amd64.tar.gz | tar -xvz ; fi \
+    && cp /mattermost/config/config.json /config.json.save \
+    && rm -rf /mattermost/config/config.json \
+    && addgroup -g ${PGID} mattermost \
+    && adduser -D -u ${PUID} -G mattermost -h /mattermost -D mattermost \
+    && chown -R mattermost:mattermost /mattermost /config.json.save /mattermost/plugins /mattermost/client/plugins
 
-RUN chmod +x ./docker-entry.sh
-ENTRYPOINT ./docker-entry.sh
+USER mattermost
 
-# Mattermost environment variables
-ENV PATH="/mm/mattermost/bin:${PATH}"
+#Healthcheck to make sure container is ready
+HEALTHCHECK CMD curl --fail http://localhost:8065 || exit 1
 
-# Create default storage directory
-RUN mkdir ./mattermost-data
-VOLUME ./mattermost-data
+# Configure entrypoint and command
+COPY entrypoint.sh /
+ENTRYPOINT ["/entrypoint.sh"]
+WORKDIR /mattermost
+CMD ["mattermost"]
 
-# Ports
+# Expose port 8065 of the container
 EXPOSE 8065
+
+# Declare volumes for mount point directories
+VOLUME ["/mattermost/data", "/mattermost/logs", "/mattermost/config", "/mattermost/plugins", "/mattermost/client/plugins"]
